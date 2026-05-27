@@ -548,9 +548,20 @@ async def on_ready():
     bot.loop.create_task(sina_spontaneous_loop())
 
 @bot.event
+async def on_command_error(ctx, error):
+    """Global error handler for bot commands to print errors directly to Discord."""
+    print(f"[Command Error] {error}")
+    await ctx.reply(f"🙄 **ugh, command error**: `{error}`. try not to mess up next time.")
+
+@bot.event
 async def on_message(message):
     # Ignore messages sent by bots (including ourselves)
     if message.author.bot:
+        return
+
+    # If the message starts with our command prefix (!), process it as a command and skip conversation processing
+    if message.content.startswith("!"):
+        await bot.process_commands(message)
         return
 
     # Check if the message is a Direct Message, a mention, or sent in the #sina channel
