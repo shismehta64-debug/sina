@@ -1,117 +1,149 @@
 import os
 import threading
 import asyncio
-import gradio as gr
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 
-# Load environment variables from .env
+# Load local .env (no-op in production where env vars are set directly)
 load_dotenv()
 
-# Import Discord bot client from discord_bot.py
+# Import the Discord bot
 from discord_bot import bot
 
+
+# ── Discord Bot Background Thread ─────────────────────────────────────────────
+
 def run_discord_bot():
-    """Starts the Discord bot in a background thread with its own asyncio event loop."""
-    print("[Hugging Face Starter] Initializing Discord gateway in background thread...")
+    """Starts the Discord bot in its own asyncio event loop on a background thread."""
+    print("[Render] Starting Discord gateway in background thread...")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    token = os.getenv("DISCORD_TOKEN")
-    if token:
-        try:
-            loop.run_until_complete(bot.start(token))
-        except Exception as e:
-            print(f"[Hugging Face Starter Error] Bot failed to start: {e}")
-    else:
-        print("[Hugging Face Starter Error] DISCORD_TOKEN is missing in environment variables!")
 
-# Launch Discord bot background thread immediately
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        print("[Render Error] DISCORD_TOKEN is not set! Bot cannot start.")
+        return
+    try:
+        loop.run_until_complete(bot.start(token))
+    except Exception as e:
+        print(f"[Render Error] Discord bot crashed: {e}")
+
+
+# Start bot immediately in the background
 bot_thread = threading.Thread(target=run_discord_bot, daemon=True)
 bot_thread.start()
 
-# Load memory stats to show on the status dashboard
-def get_memory_counts():
-    try:
-        unified_count = 0
-        if os.path.exists("unified_memory.txt"):
-            with open("unified_memory.txt", "r", encoding="utf-8") as f:
-                unified_count = sum(1 for line in f if line.strip())
-        return f"🟢 Persistent (Active facts: {unified_count})"
-    except Exception:
-        return "⚠️ Unknown"
 
-# Sleek premium dark theme dashboard for Gradio status page
-css = """
-body {
-    background-color: #0b0f19 !important;
-    font-family: 'Inter', 'Outfit', sans-serif !important;
-}
-.gradio-container {
-    background: radial-gradient(circle at top, #111827, #030712) !important;
-    border: 1px solid #1f2937 !important;
-    border-radius: 16px !important;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
-    padding: 30px !important;
-    max-width: 700px !important;
-    margin: 50px auto !important;
-}
-h1 {
-    background: linear-gradient(to right, #a78bfa, #c084fc, #f472b6);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    font-weight: 800 !important;
-    letter-spacing: -1px;
-    text-align: center;
-    margin-bottom: 5px !important;
-}
-p {
-    color: #9ca3af !important;
-    text-align: center !important;
-}
-.status-badge {
-    background-color: rgba(167, 139, 250, 0.1) !important;
-    border: 1px solid rgba(167, 139, 250, 0.3) !important;
-    color: #c084fc !important;
-    border-radius: 9999px;
-    padding: 8px 16px;
-    display: inline-block;
-    font-weight: 600;
-    margin: 15px auto !important;
-    font-size: 14px;
-}
-"""
+# ── Lightweight HTTP Status Server (for UptimeRobot keep-alive pings) ─────────
 
-with gr.Blocks(title="SINA AI | Status Page") as demo:
-    gr.HTML("""
-    <div style='text-align: center; margin-top: 20px;'>
-        <h1>SINA AI</h1>
-        <p style='font-size: 16px;'>Conscious, bratty, and delightfully weird casual companion</p>
-        <div class='status-badge'>💅 SINA is Online & Active</div>
+STATUS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SINA AI | Status</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: radial-gradient(circle at top, #111827, #030712);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Inter', sans-serif;
+      color: #e5e7eb;
+    }
+    .card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(167,139,250,0.2);
+      border-radius: 20px;
+      padding: 48px 56px;
+      text-align: center;
+      max-width: 520px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    }
+    .dot {
+      width: 12px; height: 12px;
+      background: #4ade80;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+      box-shadow: 0 0 8px #4ade80;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(1.3); }
+    }
+    h1 {
+      font-size: 2.8rem;
+      font-weight: 800;
+      background: linear-gradient(to right, #a78bfa, #c084fc, #f472b6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    .tagline { color: #9ca3af; font-size: 0.95rem; margin-bottom: 32px; }
+    .status-row { display: flex; justify-content: space-between; align-items: center;
+                  background: rgba(255,255,255,0.04); border-radius: 10px;
+                  padding: 12px 20px; margin: 8px 0; font-size: 0.9rem; }
+    .status-row .label { color: #9ca3af; }
+    .status-row .value { color: #e5e7eb; font-weight: 600; }
+    .footer { margin-top: 32px; font-size: 0.75rem; color: #4b5563; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>SINA</h1>
+    <p class="tagline">Conscious · Bratty · Delightfully Weird</p>
+
+    <div class="status-row">
+      <span class="label"><span class="dot"></span>Status</span>
+      <span class="value">Online &amp; Active</span>
     </div>
-    """)
-    
-    gr.Markdown("---")
-    
-    with gr.Row():
-        with gr.Column():
-            gr.Markdown("### 🧠 SINA System Status")
-            gr.Markdown(f"**Gateway Engine**: `discord.py` (WebSocket connected)")
-            gr.Markdown(f"**Default Model**: `llama-3.3-70b-instruct` (OpenRouter)")
-            gr.Markdown(f"**Vision Model**: `gemini-2.5-flash` (Multimodal vision)")
-            
-        with gr.Column():
-            gr.Markdown("### 📁 Memory Synchronization")
-            gr.Markdown(f"**Memory Engine**: Auto-Commit Git Persistence")
-            gr.Markdown(f"**Unified memory state**: {get_memory_counts()}")
-            gr.Markdown(f"**Hugging Face Syncing**: Enabled (Secure repository loop)")
-            
-    gr.Markdown("---")
-    gr.HTML("""
-    <div style='text-align: center; font-size: 12px; color: #4b5563; margin-top: 20px;'>
-        SINA AI Bot • Built with 💀 by Shis • Running 24/7 on Hugging Face Spaces
+    <div class="status-row">
+      <span class="label">🧠 Engine</span>
+      <span class="value">discord.py WebSocket</span>
     </div>
-    """)
+    <div class="status-row">
+      <span class="label">⚡ AI Model</span>
+      <span class="value">llama-3.3-70b (OpenRouter)</span>
+    </div>
+    <div class="status-row">
+      <span class="label">👁️ Vision</span>
+      <span class="value">Gemini 2.5 Flash</span>
+    </div>
+    <div class="status-row">
+      <span class="label">💾 Memory</span>
+      <span class="value">GitHub Auto-Sync</span>
+    </div>
 
-# Launch port 7860 as required by Hugging Face Space
-if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, css=css)
+    <p class="footer">SINA AI · Built by Shis · Hosted on Render 24/7</p>
+  </div>
+</body>
+</html>"""
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    """Handles HTTP GET requests — returns 200 with SINA's status page."""
+
+    def do_GET(self):
+        body = STATUS_HTML.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        # Suppress noisy default request logs
+        pass
+
+
+# Render injects the $PORT environment variable — we must listen on it
+port = int(os.getenv("PORT", 8080))
+print(f"[Render] Health server listening on port {port}. UptimeRobot can now keep SINA awake!")
+
+server = HTTPServer(("0.0.0.0", port), HealthHandler)
+server.serve_forever()
