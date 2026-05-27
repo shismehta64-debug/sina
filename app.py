@@ -284,6 +284,12 @@ STATUS_HTML = """<!DOCTYPE html>
 
 class SinaHandler(BaseHTTPRequestHandler):
 
+    def do_HEAD(self):
+        # UptimeRobot uses HEAD requests to check uptime — must return 200
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+
     def do_GET(self):
         if self.path == "/logs":
             # Return log buffer as JSON array
