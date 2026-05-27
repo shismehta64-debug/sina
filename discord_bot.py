@@ -98,7 +98,7 @@ async def leave(ctx):
     await voice_client.disconnect()
     await ctx.reply("👋 leaving. this was getting dry anyway.")
 
-@bot.command(name="say")
+@bot.command(name="say", aliases=["speak"])
 async def say(ctx, *, message: str):
     """Makes SINA speak the given text in her voice channel."""
     voice_client = ctx.voice_client
