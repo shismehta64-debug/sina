@@ -6,6 +6,9 @@ import threading
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+from static_ffmpeg import add_paths
+add_paths()  # Dynamically adds static FFmpeg binaries to PATH for Render
+
 
 # Import OpenRouter client, SINA prompt, and models from sina.py
 from sina import client, SINA_SYSTEM_PROMPT, OPENROUTER_MODEL, OPENROUTER_VISION_MODEL

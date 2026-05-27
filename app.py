@@ -3,6 +3,9 @@ import sys
 import json
 import threading
 import asyncio
+from static_ffmpeg import add_paths
+add_paths()  # Dynamically adds static FFmpeg binaries to PATH for Render
+
 from datetime import datetime
 from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
