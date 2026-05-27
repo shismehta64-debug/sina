@@ -10,15 +10,113 @@ from dotenv import load_dotenv
 # Import OpenRouter client, SINA prompt, and models from sina.py
 from sina import client, SINA_SYSTEM_PROMPT, OPENROUTER_MODEL, OPENROUTER_VISION_MODEL
 
+# SINA STT & TTS imports
+import edge_tts
+from groq import Groq
+
 # Load token from .env file
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
+# ── SINA STT & TTS Voice Engine ───────────────────────────────────────────────
+
+async def transcribe_audio_groq(file_path):
+    """Transcribes an audio file using Groq's Whisper-large-v3 API."""
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if not groq_api_key:
+        print("[STT Error] GROQ_API_KEY is not set in environment!")
+        return ""
+    
+    def transcribe():
+        try:
+            client_groq = Groq(api_key=groq_api_key)
+            with open(file_path, "rb") as audio_file:
+                transcription = client_groq.audio.transcriptions.create(
+                    file=(os.path.basename(file_path), audio_file.read()),
+                    model="whisper-large-v3",
+                    response_format="json"
+                )
+            return transcription.text
+        except Exception as e:
+            print(f"[STT Error] Groq Whisper transcription failed: {e}")
+            return ""
+
+    return await asyncio.to_thread(transcribe)
+
+async def generate_tts(text, filename="response.mp3"):
+    """Generates natural human-like voice synthesis using Microsoft Edge TTS."""
+    try:
+        voice = os.getenv("SINA_VOICE", "en-US-AnaNeural")
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(filename)
+        return filename
+    except Exception as e:
+        print(f"[TTS Error] edge-tts synthesis failed: {e}")
+        return None
+
+
 # Setup Discord intents
 intents = discord.Intents.default()
 intents.message_content = True  # Required to read message content
+intents.voice_states = True      # Required to join/manage voice channels
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ── SINA Voice Channel Commands ───────────────────────────────────────────────
+
+@bot.command(name="join")
+async def join(ctx):
+    """Makes SINA join the user's current voice channel."""
+    if not ctx.author.voice:
+        await ctx.reply("🙄 you're not even in a voice channel, dummy. join one first.")
+        return
+    
+    channel = ctx.author.voice.channel
+    voice_client = ctx.voice_client
+    
+    if voice_client:
+        if voice_client.channel.id == channel.id:
+            await ctx.reply("💅 i'm already right here. open your ears.")
+            return
+        await voice_client.move_to(channel)
+    else:
+        await channel.connect()
+    
+    await ctx.reply(f"💅 alright, i joined **{channel.name}**. try not to bore me.")
+
+@bot.command(name="leave")
+async def leave(ctx):
+    """Makes SINA leave the voice channel."""
+    voice_client = ctx.voice_client
+    if not voice_client:
+        await ctx.reply("🙄 i'm not even in a voice channel, dumbass.")
+        return
+    
+    await voice_client.disconnect()
+    await ctx.reply("👋 leaving. this was getting dry anyway.")
+
+@bot.command(name="say")
+async def say(ctx, *, message: str):
+    """Makes SINA speak the given text in her voice channel."""
+    voice_client = ctx.voice_client
+    if not voice_client or not voice_client.is_connected():
+        await ctx.reply("🙄 i'm not in a voice channel. use `!join` first, dummy.")
+        return
+    
+    # Generate SINA's voice file using edge-tts
+    filename = f"say_{ctx.message.id}.mp3"
+    await generate_tts(message, filename)
+    
+    if os.path.exists(filename):
+        if voice_client.is_playing():
+            voice_client.stop()
+        
+        # Stream the audio file to the voice channel
+        voice_client.play(discord.FFmpegPCMAudio(filename), after=lambda e: os.remove(filename) if os.path.exists(filename) else None)
+        await ctx.message.add_reaction("💅")
+    else:
+        await ctx.reply("system error... couldn't synthesize your boring text.")
+
 
 # Dictionary to hold conversation metadata, history, and summaries per channel
 # Structure: 
@@ -477,8 +575,52 @@ async def on_message(message):
         # Check if they sent any image attachments
         has_images = any(att.content_type and att.content_type.startswith("image/") for att in message.attachments)
 
-        # If they just pinged her without typing any message and without sending an image
-        if not cleaned_content and not has_images:
+        # Check if they sent any audio attachments (voice notes or audio files)
+        audio_extensions = (".ogg", ".mp3", ".wav", ".m4a", ".aac", ".flac")
+        has_audio = any(
+            (att.content_type and att.content_type.startswith("audio/")) or 
+            any(att.filename.lower().endswith(ext) for ext in audio_extensions)
+            for att in message.attachments
+        )
+
+        is_voice_note = False
+        if has_audio:
+            audio_attachment = None
+            for att in message.attachments:
+                if (att.content_type and att.content_type.startswith("audio/")) or any(att.filename.lower().endswith(ext) for ext in audio_extensions):
+                    audio_attachment = att
+                    break
+            
+            if audio_attachment:
+                print(f"[Voice Engine] Found audio attachment: {audio_attachment.filename}")
+                await message.add_reaction("👂")
+                
+                # Download the audio file
+                local_audio_path = f"recv_{message.id}_{audio_attachment.filename}"
+                await audio_attachment.save(local_audio_path)
+                
+                # Transcribe via Groq Whisper
+                transcription = await transcribe_audio_groq(local_audio_path)
+                
+                # Clean up the downloaded file
+                if os.path.exists(local_audio_path):
+                    os.remove(local_audio_path)
+                    
+                if transcription:
+                    print(f"[STT] Transcribed text: \"{transcription}\"")
+                    cleaned_content = transcription
+                    is_voice_note = True
+                    try:
+                        await message.remove_reaction("👂", bot.user)
+                    except Exception:
+                        pass
+                else:
+                    print("[STT Error] Transcription was empty or failed!")
+                    await message.reply("🙄 i heard some noise but couldn't make out a single word. try speaking clearly.")
+                    return
+
+        # If they just pinged her without typing any message, sending an image, or sending audio
+        if not cleaned_content and not has_images and not has_audio:
             if is_mentioned:
                 await message.reply("you mentioned me but said nothing. want to actually chat or are you just testing my patience?")
             return
@@ -579,7 +721,40 @@ async def on_message(message):
             async with message.channel.typing():
                 await asyncio.sleep(typing_duration)
                 
-            await message.reply(sina_reply)
+            # Voice channel integration check
+            voice_client = message.guild.voice_client if message.guild else None
+            
+            if voice_client and voice_client.is_connected():
+                # Speak out loud in the voice channel!
+                filename = f"reply_{message.id}.mp3"
+                await generate_tts(sina_reply, filename)
+                
+                if os.path.exists(filename):
+                    if voice_client.is_playing():
+                        voice_client.stop()
+                    
+                    voice_client.play(discord.FFmpegPCMAudio(filename), after=lambda e: os.remove(filename) if os.path.exists(filename) else None)
+                    print(f"[Voice Engine] Speaking response in VC: \"{sina_reply}\"")
+                    # Also send text response
+                    await message.reply(f"🎙️ *{sina_reply}*")
+                else:
+                    await message.reply(sina_reply)
+            
+            elif is_voice_note:
+                # Respond with a voice note file in text chat
+                filename = f"reply_{message.id}.mp3"
+                await generate_tts(sina_reply, filename)
+                
+                if os.path.exists(filename):
+                    file = discord.File(filename, filename="sina_reply.mp3")
+                    await message.reply(content=f"💅 *{sina_reply}*", file=file)
+                    os.remove(filename)
+                else:
+                    await message.reply(sina_reply)
+            
+            else:
+                # Standard text reply
+                await message.reply(sina_reply)
             
             history.append({
                 "role": "assistant",
