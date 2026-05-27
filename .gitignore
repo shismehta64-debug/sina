@@ -1,0 +1,15 @@
+# Environment & Secrets (NEVER commit this)
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# NOTE: Memory files (unified_memory.txt, specific_memory_*.txt) are intentionally
+# NOT ignored so they are committed to the repo and persist across Railway redeploys.
